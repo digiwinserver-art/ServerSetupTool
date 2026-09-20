@@ -23,3 +23,5 @@ Windows Server 設定工具的**成品發布儲存庫**，不公開程式原始�
 - .github/workflows：將已驗證成品建立為 GitHub Release 的流程，不在 GitHub 編譯或執行程式。
 
 程式目前未使用商用程式碼簽章；請只從本儲存庫取得檔案。SHA-256 用於核對下載完整性，不取代對發布者的信任。
+
+從1.0.30起，更新除核對雜湊外，還必須通過程式內嵌公鑰的獨立發布簽章驗證。Release 提供 release.json 與 release.json.sig；GitHub Actions 只驗證與發布，不持有簽署私鑰。首次從1.0.29升級仍由舊版驗證流程處理。
