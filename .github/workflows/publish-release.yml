@@ -1,0 +1,57 @@
+name: Publish binary release
+on:
+  push:
+    branches: [main]
+    paths: [packages/release.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: binary-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read the already-built package at this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json
+          blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/packages/ServerSetupTool-win-x64.zip?ref=$GITHUB_SHA" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq .content | base64 --decode > ServerSetupTool-win-x64.zip
+      - name: Verify package hash and delivery files without running the EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, re, zipfile
+          from pathlib import Path
+          metadata = json.loads(Path('release.json').read_text(encoding='utf-8-sig'))
+          version = metadata['version']
+          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Invalid version'
+          name = 'ServerSetupTool-win-x64.zip'
+          digest = hashlib.sha256(Path(name).read_bytes()).hexdigest()
+          assert digest == metadata['sha256'].lower(), 'Package hash mismatch'
+          required = {'ServerSetupTool.exe', 'ServerSetupTool.exe.config', 'Config.example.json', 'README.md', '使用說明.html', '更新說明-'+version+'.md', 'Offline/README.txt', 'UpdateSettings.example.json'}
+          with zipfile.ZipFile(name) as z:
+              files = [n for n in z.namelist() if not n.endswith('/')]
+              assert len(files) == len(required) and set(files) == required, 'Unexpected package files'
+              Path('release-notes.md').write_bytes(z.read('更新說明-'+version+'.md'))
+          Path(name+'.sha256').write_text(digest+'  '+name+'\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('RELEASE_TAG=v'+version+'\n')
+          PY
+      - name: Publish a new version without overwriting a previous release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite it."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" ServerSetupTool-win-x64.zip ServerSetupTool-win-x64.zip.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ServerSetupTool $RELEASE_TAG" --notes-file release-notes.md --draft
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
