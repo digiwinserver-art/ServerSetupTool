@@ -21,6 +21,8 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json
+          gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json.sig?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json.sig
+          gh api "repos/$GITHUB_REPOSITORY/contents/release-public-key.xml?ref=$GITHUB_SHA" --jq .content | base64 --decode > release-public-key.xml
           blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/packages/ServerSetupTool-win-x64.zip?ref=$GITHUB_SHA" --jq .sha)
           gh api "repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq .content | base64 --decode > ServerSetupTool-win-x64.zip
       - name: Verify package hash and delivery files without running the EXE
@@ -28,19 +30,38 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import hashlib, json, os, re, zipfile
+          import base64, hashlib, json, os, re, subprocess, zipfile
+          import xml.etree.ElementTree as ET
           from pathlib import Path
           metadata = json.loads(Path('release.json').read_text(encoding='utf-8-sig'))
           version = metadata['version']
-          assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Invalid version'
+          assert re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', version), 'Invalid version'
           name = 'ServerSetupTool-win-x64.zip'
+          assert metadata['schema'] == 1 and metadata['filename'] == name and metadata['keyId'] == 'release-key-2026', 'Invalid manifest'
+          assert re.fullmatch(r'[a-f0-9]{64}', metadata['sha256']), 'Invalid digest'
+          payload = ''.join(f'{k}={metadata[k]}\n' for k in ['schema','version','filename','sha256','keyId']).encode('utf-8')
+          Path('canonical.bin').write_bytes(payload)
+          key = ET.fromstring(Path('release-public-key.xml').read_bytes())
+          def der(tag, data):
+              size = len(data)
+              length = bytes([size]) if size < 128 else bytes([128 + (size.bit_length()+7)//8]) + size.to_bytes((size.bit_length()+7)//8, 'big')
+              return bytes([tag]) + length + data
+          def integer(name):
+              data = base64.b64decode(key.findtext(name), validate=True).lstrip(b'\0')
+              if data[0] & 128: data = b'\0' + data
+              return der(2, data)
+          assert len(base64.b64decode(key.findtext('Modulus'))) >= 384, 'RSA key too small'
+          encoded = base64.b64encode(der(48, integer('Modulus') + integer('Exponent'))).decode('ascii')
+          Path('public.pem').write_text('-----BEGIN RSA PUBLIC KEY-----\n'+'\n'.join(encoded[i:i+64] for i in range(0,len(encoded),64))+'\n-----END RSA PUBLIC KEY-----\n')
+          subprocess.run(['openssl','dgst','-sha256','-verify','public.pem','-signature','release.json.sig','canonical.bin'], check=True)
           digest = hashlib.sha256(Path(name).read_bytes()).hexdigest()
           assert digest == metadata['sha256'].lower(), 'Package hash mismatch'
           required = {'ServerSetupTool.exe', 'ServerSetupTool.exe.config', 'Config.example.json', 'README.md', '使用說明.html', '更新說明-'+version+'.md', 'Offline/README.txt', 'UpdateSettings.example.json'}
           with zipfile.ZipFile(name) as z:
               files = [n for n in z.namelist() if not n.endswith('/')]
               assert len(files) == len(required) and set(files) == required, 'Unexpected package files'
-              Path('release-notes.md').write_bytes(z.read('更新說明-'+version+'.md'))
+              original_notes = z.read('更新說明-'+version+'.md').decode('utf-8-sig')
+              Path('release-notes.md').write_text('本版已將本機簽署成品補發至 GitHub。以下保留原本本機交付時的更新與驗證紀錄；其中「尚未上傳」是當時狀態。\n\n'+original_notes, encoding='utf-8')
           Path(name+'.sha256').write_text(digest+'  '+name+'\n')
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('RELEASE_TAG=v'+version+'\n')
@@ -53,5 +74,14 @@ jobs:
             echo "Release already exists; refusing to overwrite it."
             exit 1
           fi
-          gh release create "$RELEASE_TAG" ServerSetupTool-win-x64.zip ServerSetupTool-win-x64.zip.sha256 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ServerSetupTool $RELEASE_TAG" --notes-file release-notes.md --draft
+          # List tags successfully before proceeding; API errors must stop publication.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" > existing-tags.json
+          python3 -c 'import json,os; assert not any(t["ref"] == "refs/tags/"+os.environ["RELEASE_TAG"] for t in json.load(open("existing-tags.json"))), "Tag already exists; refusing reuse"'
+          gh release create "$RELEASE_TAG" ServerSetupTool-win-x64.zip ServerSetupTool-win-x64.zip.sha256 release.json release.json.sig --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ServerSetupTool $RELEASE_TAG" --notes-file release-notes.md --draft
+          mkdir uploaded
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir uploaded
+          cmp ServerSetupTool-win-x64.zip uploaded/ServerSetupTool-win-x64.zip
+          cmp ServerSetupTool-win-x64.zip.sha256 uploaded/ServerSetupTool-win-x64.zip.sha256
+          cmp release.json uploaded/release.json
+          cmp release.json.sig uploaded/release.json.sig
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
