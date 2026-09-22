@@ -23,7 +23,9 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json
-          gh api -H "Accept: application/vnd.github.raw+json" "repos/$GITHUB_REPOSITORY/contents/packages/release.json.sig?ref=$GITHUB_SHA" > release.json.sig
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_SHA/packages/release.json.sig" \
+            --output release.json.sig
           gh api "repos/$GITHUB_REPOSITORY/contents/release-public-key.xml?ref=$GITHUB_SHA" --jq .content | base64 --decode > release-public-key.xml
           blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/packages/ServerSetupTool-win-x64.zip?ref=$GITHUB_SHA" --jq .sha)
           gh api "repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq .content | base64 --decode > ServerSetupTool-win-x64.zip
