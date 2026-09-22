@@ -2,7 +2,9 @@ name: Publish binary release
 on:
   push:
     branches: [main]
-    paths: [packages/release.json]
+    paths:
+      - packages/release.json
+      - .github/workflows/publish-release.yml
   workflow_dispatch:
 permissions:
   contents: write
@@ -21,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json
-          gh api "repos/$GITHUB_REPOSITORY/contents/packages/release.json.sig?ref=$GITHUB_SHA" --jq .content | base64 --decode > release.json.sig
+          gh api -H "Accept: application/vnd.github.raw+json" "repos/$GITHUB_REPOSITORY/contents/packages/release.json.sig?ref=$GITHUB_SHA" > release.json.sig
           gh api "repos/$GITHUB_REPOSITORY/contents/release-public-key.xml?ref=$GITHUB_SHA" --jq .content | base64 --decode > release-public-key.xml
           blob=$(gh api "repos/$GITHUB_REPOSITORY/contents/packages/ServerSetupTool-win-x64.zip?ref=$GITHUB_SHA" --jq .sha)
           gh api "repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq .content | base64 --decode > ServerSetupTool-win-x64.zip
@@ -53,6 +55,7 @@ jobs:
           assert len(base64.b64decode(key.findtext('Modulus'))) >= 384, 'RSA key too small'
           encoded = base64.b64encode(der(48, integer('Modulus') + integer('Exponent'))).decode('ascii')
           Path('public.pem').write_text('-----BEGIN RSA PUBLIC KEY-----\n'+'\n'.join(encoded[i:i+64] for i in range(0,len(encoded),64))+'\n-----END RSA PUBLIC KEY-----\n')
+          assert len(Path('release.json.sig').read_bytes()) == len(base64.b64decode(key.findtext('Modulus'))), 'Invalid signature length'
           subprocess.run(['openssl','dgst','-sha256','-verify','public.pem','-signature','release.json.sig','canonical.bin'], check=True)
           digest = hashlib.sha256(Path(name).read_bytes()).hexdigest()
           assert digest == metadata['sha256'].lower(), 'Package hash mismatch'
@@ -85,3 +88,4 @@ jobs:
           cmp release.json uploaded/release.json
           cmp release.json.sig uploaded/release.json.sig
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
