@@ -1,4 +1,4 @@
-﻿# ServerSetupTool
+# ServerSetupTool
 
 Windows Server 設定工具的**成品發布儲存庫**，不公開程式原始碼。
 
@@ -9,6 +9,10 @@ Windows Server 設定工具的**成品發布儲存庫**，不公開程式原始�
 3. 執行 `ServerSetupTool.exe`，接受管理員權限提示。先查看說明，再勾選需要的工作。
 
 需求：Windows Server 2016／2019／2022／2025 Desktop Experience 或支援的 Windows 11 x64；.NET Framework 4.8。個別工作仍受作業系統與原則限制。工具不自動重開機。
+
+## 版本更新紀錄
+
+[查看歷史版本更新說明](https://github.com/digiwinserver-art/ServerSetupTool/blob/main/更新說明.md)，了解各版功能新增、改善與調整。各正式 Release 也提供該版摘要。
 
 ## 更新與離線使用
 
