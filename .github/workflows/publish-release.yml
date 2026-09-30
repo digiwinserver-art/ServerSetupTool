@@ -82,6 +82,17 @@ jobs:
           # List tags successfully before proceeding; API errors must stop publication.
           gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" > existing-tags.json
           python3 -c 'import json,os; assert not any(t["ref"] == "refs/tags/"+os.environ["RELEASE_TAG"] for t in json.load(open("existing-tags.json"))), "Tag already exists; refusing reuse"'
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > existing-releases.json
+          python3 - <<'PY'
+          import json, os, re
+          new = tuple(map(int, os.environ['RELEASE_TAG'][1:].split('.')))
+          versions = []
+          for release in json.load(open('existing-releases.json')):
+              match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', release.get('tag_name', ''))
+              if match and not release.get('draft') and not release.get('prerelease'):
+                  versions.append(tuple(map(int, match.groups())))
+          assert not versions or new > max(versions), 'Version must be greater than every published stable release'
+          PY
           gh release create "$RELEASE_TAG" ServerSetupTool-win-x64.zip ServerSetupTool-win-x64.zip.sha256 release.json release.json.sig --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "ServerSetupTool $RELEASE_TAG" --notes-file release-notes.md --draft
           mkdir uploaded
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir uploaded
@@ -90,4 +101,3 @@ jobs:
           cmp release.json uploaded/release.json
           cmp release.json.sig uploaded/release.json.sig
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-
